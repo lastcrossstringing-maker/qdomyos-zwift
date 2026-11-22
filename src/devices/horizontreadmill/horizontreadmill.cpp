@@ -1001,15 +1001,44 @@ void horizontreadmill::update() {
                 requestSpeed = qMax(0.8, qMin(20.0, requestedSpeed));
                 qDebug() << "requestSpeed after Moovio supported-range clamp=" << requestSpeed;
             }
-            bool minSpeed =
-                fabs(requestSpeed - float_one_point_round(speedForControl)) >= (minStepSpeed() - 0.09);
-            bool forceSpeedNeed = checkIfForceSpeedNeeding(requestSpeed);
-            qDebug() << "requestSpeed=" << requestSpeed << minSpeed << forceSpeedNeed
-                     << float_one_point_round(speedForControl);
-            if (float_one_point_round(requestSpeed) != float_one_point_round(speedForControl) && minSpeed && requestSpeed >= 0 && requestSpeed <= 22 &&
-                forceSpeedNeed) {
-                emit debug(QStringLiteral("writing speed ") + QString::number(requestSpeed));
-                forceSpeed(float_one_point_round(requestSpeed));
+            if (BOWFLEX_T9) {
+                // The T9 takes its target in mph and its belt only moves in 0.1 mph steps, while FTMS
+                // apps (Runna for example) step in 0.1 km/h (about 0.06 mph) from the speed we report.
+                // One step can round back to the belt's current 0.1 mph, so the belt never moves and
+                // the app asks for the same speed again on the next press. Work in tenths of mph:
+                // send the nearest 0.1 mph, and when that is the step the belt is already on but the
+                // app asked for one of its own steps faster or slower, move one 0.1 mph that way.
+                const double kmhToMph = 0.621371;
+                const int currentTenths = qRound(speedForControl * kmhToMph * 10.0);
+                int requestTenths = qRound(static_cast<double>(requestSpeed) * kmhToMph * 10.0);
+                const double shownSpeed = qRound(speedForControl * 10.0) / 10.0;
+                if (requestTenths == currentTenths) {
+                    if (requestSpeed >= shownSpeed + 0.09) {
+                        requestTenths++;
+                    } else if (requestSpeed <= shownSpeed - 0.09) {
+                        requestTenths--;
+                    }
+                }
+                qDebug() << "requestSpeed=" << requestSpeed << "BOWFLEX_T9 tenths of mph, request"
+                         << requestTenths << "current" << currentTenths;
+                if (requestTenths != currentTenths && requestTenths >= 0 && requestSpeed >= 0 &&
+                    requestSpeed <= 22) {
+                    emit debug(QStringLiteral("writing speed ") + QString::number(requestSpeed));
+                    // forceSpeed() converts km/h to mph for this treadmill, so pass the exact km/h
+                    // value of the 0.1 mph step
+                    forceSpeed((requestTenths / 10.0) / kmhToMph);
+                }
+            } else {
+                bool minSpeed =
+                    fabs(requestSpeed - float_one_point_round(speedForControl)) >= (minStepSpeed() - 0.09);
+                bool forceSpeedNeed = checkIfForceSpeedNeeding(requestSpeed);
+                qDebug() << "requestSpeed=" << requestSpeed << minSpeed << forceSpeedNeed
+                         << float_one_point_round(speedForControl);
+                if (float_one_point_round(requestSpeed) != float_one_point_round(speedForControl) && minSpeed && requestSpeed >= 0 && requestSpeed <= 22 &&
+                    forceSpeedNeed) {
+                    emit debug(QStringLiteral("writing speed ") + QString::number(requestSpeed));
+                    forceSpeed(float_one_point_round(requestSpeed));
+                }
             }
             requestSpeed = -1;
         }
