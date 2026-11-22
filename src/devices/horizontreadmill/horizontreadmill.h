@@ -41,6 +41,7 @@ class horizontreadmill : public treadmill {
     bool connected() override;
     void forceSpeed(double requestSpeed);
     void forceIncline(double requestIncline);
+    void changeSpeed(double speed) override;
     double minStepInclination() override;
     double minStepSpeed() override;
 

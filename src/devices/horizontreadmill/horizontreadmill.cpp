@@ -919,6 +919,16 @@ void horizontreadmill::btinit() {
 
 float horizontreadmill::float_one_point_round(float value) { return ((float)((int)(value * 10))) / 10; }
 
+// BowFlex T9: speed requests written by the app since update() last handled one.
+static int bowflexT9SpeedWrites = 0;
+
+void horizontreadmill::changeSpeed(double speed) {
+    if (BOWFLEX_T9) {
+        bowflexT9SpeedWrites++;
+    }
+    treadmill::changeSpeed(speed);
+}
+
 void horizontreadmill::update() {
     if (m_control->state() == QLowEnergyController::UnconnectedState) {
 
@@ -1010,17 +1020,50 @@ void horizontreadmill::update() {
                 // app asked for one of its own steps faster or slower, move one 0.1 mph that way.
                 const double kmhToMph = 0.621371;
                 const int currentTenths = qRound(speedForControl * kmhToMph * 10.0);
-                int requestTenths = qRound(static_cast<double>(requestSpeed) * kmhToMph * 10.0);
                 const double shownSpeed = qRound(speedForControl * 10.0) / 10.0;
-                if (requestTenths == currentTenths) {
-                    if (requestSpeed >= shownSpeed + 0.09) {
-                        requestTenths++;
-                    } else if (requestSpeed <= shownSpeed - 0.09) {
-                        requestTenths--;
+                const double req = static_cast<double>(requestSpeed);
+                int requestTenths = qRound(req * kmhToMph * 10.0);
+
+                // Quick presses: the app adds its own 0.1 km/h (0.06 mph) per press, and it does
+                // so before the belt has reported the new speed, so five quick presses arrive
+                // as about +0.4 km/h and the belt moved two 0.1 mph steps instead of five.
+                // changeSpeed() counts every request the app writes. A request that is one app
+                // step away from the belt speed starts a run of presses, and every further
+                // request within 1 s of the one before is one more 0.1 mph step in the same direction.
+                static qint64 pressLast = 0;      // time of the last press, ms
+                static int pressDir = 0;          // +1 / -1 while a run of presses is going on
+                static double pressBaseShown = 0; // belt speed shown to the app when the run began, km/h
+                static int pressBaseTenths = 0;   // the same in tenths of mph
+                static int pressCount = 0;        // presses in this run
+                const int writes = qMax(1, bowflexT9SpeedWrites);
+                bowflexT9SpeedWrites = 0;
+                const qint64 nowMs = QDateTime::currentMSecsSinceEpoch();
+                const bool inPressRun =
+                    pressDir != 0 && (nowMs - pressLast) <= 1000 && fabs(req - pressBaseShown) <= 1.0;
+                if (inPressRun) {
+                    pressCount += writes;
+                    pressLast = nowMs;
+                    requestTenths = pressBaseTenths + pressDir * pressCount;
+                } else {
+                    const double diff = req - shownSpeed;
+                    if (fabs(diff) >= 0.085 && fabs(diff) <= 0.1 * writes + 0.065) {
+                        pressDir = diff > 0 ? 1 : -1;
+                        pressBaseShown = shownSpeed;
+                        pressBaseTenths = currentTenths;
+                        pressCount = writes;
+                        pressLast = nowMs;
+                        requestTenths = pressBaseTenths + pressDir * pressCount;
+                    } else {
+                        // a real target (a workout pace for example): nearest 0.1 mph
+                        pressDir = 0;
                     }
                 }
+                if (requestTenths > 120) {
+                    requestTenths = 120; // 12 mph, the top speed of the T9
+                }
                 qDebug() << "requestSpeed=" << requestSpeed << "BOWFLEX_T9 tenths of mph, request"
-                         << requestTenths << "current" << currentTenths;
+                         << requestTenths << "current" << currentTenths << "writes" << writes << "pressRun"
+                         << pressDir * pressCount;
                 if (requestTenths != currentTenths && requestTenths >= 0 && requestSpeed >= 0 &&
                     requestSpeed <= 22) {
                     emit debug(QStringLiteral("writing speed ") + QString::number(requestSpeed));
